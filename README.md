@@ -1,4 +1,4 @@
-# RewardTree — Final SQLite Build
+# Laksh — Final SQLite Build
 
 A polished Node.js membership + referral + reward platform prototype using SQLite. The customer side keeps the original v2 visual design, removes emoji UI, gates referral code/link creation until membership activation, supports adding a referral code after login, fixes dummy payment with CSRF, adds reward artwork, and lets admins remove featured store items.
 
@@ -57,7 +57,7 @@ Important email variables:
 ```env
 COMPANY_EMAIL=notifications@yourdomain.com
 COMPANY_EMAIL_PASSWORD=your-email-password
-COMPANY_EMAIL_NAME=RewardTree
+COMPANY_EMAIL_NAME=Laksh
 SMTP_HOST=smtp.yourprovider.com
 SMTP_PORT=587
 SMTP_SECURE=false

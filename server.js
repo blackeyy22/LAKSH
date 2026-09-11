@@ -133,7 +133,7 @@ for (const stmt of [
 ]) { try { db.exec(stmt); } catch {} }
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)"); } catch {}
 
-const APP_NAME = process.env.APP_NAME || 'RewardTree';
+const APP_NAME = process.env.APP_NAME || 'Laksh';
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_DAYS = Number(process.env.SESSION_DAYS || 7);
 const COOKIE_SECURE = process.env.NODE_ENV === 'production';
@@ -380,8 +380,8 @@ function activateMemberAfterPayment(userId, paymentSubmissionId = null, reviewer
   });
   refreshNetworkCountsFrom(userId);
   ensureAutoPoolForEligibleUsers();
-  if (result.referrerEmail) void sendBusinessEmail(result.referrerEmail,'RewardTree referral verified','Your referral was verified',`${currentUser.name} completed the membership payment. Your verified referral total is now ${result.verifiedCountForReferrer}.`);
-  if (validEmailForNotify(currentUser.email)) void sendBusinessEmail(currentUser.email,'RewardTree payment approved','Membership activated','Your payment was approved and your RewardTree membership is now active. Your referral tools are now available.');
+  if (result.referrerEmail) void sendBusinessEmail(result.referrerEmail,'Laksh referral verified','Your referral was verified',`${currentUser.name} completed the membership payment. Your verified referral total is now ${result.verifiedCountForReferrer}.`);
+  if (validEmailForNotify(currentUser.email)) void sendBusinessEmail(currentUser.email,'Laksh payment approved','Membership activated','Your payment was approved and your Laksh membership is now active. Your referral tools are now available.');
   return result;
 }
 function validEmailForNotify(email) { return validateEmail(String(email || '')); }
@@ -417,8 +417,8 @@ function otpIssue(userId, email, purpose) {
   const clean = safeEmail(email);
   const otp = randomOtp();
   db.prepare('INSERT INTO otp_codes(user_id,email,purpose,otp_hash,expires_at,created_at) VALUES(?,?,?,?,?,?)').run(userId || null, clean, purpose, hashOtp(otp), now() + OTP_TTL_MS, now());
-  const subject = purpose === 'EMAIL_VERIFICATION' ? 'Verify your RewardTree email' : purpose === 'LOGIN' ? 'Your RewardTree login code' : 'Reset your RewardTree password';
-  const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:32px;color:#19211d"><div style="font-weight:900;letter-spacing:.12em;font-size:14px">REWARD<span style="color:#567660">TREE</span></div><h1 style="font-size:28px">${subject.replace('RewardTree ','')}</h1><p>Your one-time verification code is:</p><div style="font-size:34px;font-weight:800;letter-spacing:.3em;padding:18px 20px;background:#f1f4f0;border-radius:14px;text-align:center">${otp}</div><p style="color:#66706a">This code expires in 10 minutes. If you did not request this, you can ignore this email.</p></div>`;
+  const subject = purpose === 'EMAIL_VERIFICATION' ? 'Verify your Laksh email' : purpose === 'LOGIN' ? 'Your Laksh login code' : 'Reset your Laksh password';
+  const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:32px;color:#19211d"><div style="font-weight:900;letter-spacing:.12em;font-size:14px">LAKSH</div><h1 style="font-size:28px">${subject.replace('Laksh ','')}</h1><p>Your one-time verification code is:</p><div style="font-size:34px;font-weight:800;letter-spacing:.3em;padding:18px 20px;background:#f1f4f0;border-radius:14px;text-align:center">${otp}</div><p style="color:#66706a">This code expires in 10 minutes. If you did not request this, you can ignore this email.</p></div>`;
   if (transporter) {
     transporter.sendMail({ from: `${process.env.COMPANY_EMAIL_NAME || APP_NAME} <${process.env.COMPANY_EMAIL}>`, to: clean, subject, html }).catch(err => console.error('[EMAIL ERROR]', err.message));
   } else {
@@ -466,7 +466,7 @@ function requireAdmin(req, res) {
 function requireRole(u, roles) { return roles.includes(u.role); }
 async function sendBusinessEmail(to, subject, title, message) {
   if (!transporter || !to) return;
-  const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:32px;color:#19211d"><div style="font-weight:900;letter-spacing:.12em;font-size:14px">REWARD<span style="color:#567660">TREE</span></div><h1 style="font-size:28px;margin:28px 0 12px">${title}</h1><p style="line-height:1.65;color:#5f6962">${message}</p><div style="margin-top:28px;padding-top:18px;border-top:1px solid #e1e7e2;font-size:12px;color:#89918b">This is an automated message from ${APP_NAME}.</div></div>`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:32px;color:#19211d"><div style="font-weight:900;letter-spacing:.12em;font-size:14px">LAKSH</div><h1 style="font-size:28px;margin:28px 0 12px">${title}</h1><p style="line-height:1.65;color:#5f6962">${message}</p><div style="margin-top:28px;padding-top:18px;border-top:1px solid #e1e7e2;font-size:12px;color:#89918b">This is an automated message from ${APP_NAME}.</div></div>`;
   try { await transporter.sendMail({ from: `${process.env.COMPANY_EMAIL_NAME || APP_NAME} <${process.env.COMPANY_EMAIL}>`, to, subject, html }); }
   catch (err) { console.error('[EMAIL ERROR]', err.message); }
 }
@@ -574,24 +574,24 @@ async function handle(req, res) {
     if (!rateLimit('login', `${ip}|${email}`, 10, 15*60*1000)) return json(res,{error:'Too many login attempts. Try again later.'},429);
     const usr=userByEmail(email); if(!usr || !verifyPassword(password,usr.password_hash)) return json(res,{error:'Invalid email or password.'},401);
     if(!usr.email_verified) return json(res,{needsVerification:true,email:usr.email},403);
-    db.prepare('UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?').run(usr.id); addActivity(usr.id,'LOGIN','Successful login','You signed in to RewardTree.');
-    void sendBusinessEmail(usr.email,'Successful RewardTree login','You signed in successfully','Your RewardTree account was just signed in successfully. If this was not you, reset your password and review your account.');
+    db.prepare('UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?').run(usr.id); addActivity(usr.id,'LOGIN','Successful login','You signed in to Laksh.');
+    void sendBusinessEmail(usr.email,'Successful Laksh login','You signed in successfully','Your Laksh account was just signed in successfully. If this was not you, reset your password and review your account.');
     const s=createSession(usr.id); return json(res,{ok:true,admin:['SUPER_ADMIN','ADMIN','MEMBER_ADMIN','PAYMENT_ADMIN','REWARD_ADMIN','CONTENT_ADMIN','CAMPAIGN_ADMIN'].includes(usr.role)},200,{'Set-Cookie':[cookie('rt_sid',s.sid),cookie('rt_csrf',s.csrf,SESSION_DAYS*86400000,false)]});
   }
   if (method === 'POST' && pathname === '/api/auth/login-otp/send') {
     const b=await body(req), email=safeEmail(b.email); if(!rateLimit('otp-send',`${req.socket.remoteAddress}|${email}|LOGIN`,5,15*60*1000))return json(res,{error:'Please wait before requesting another code.'},429); const usr=userByEmail(email);if(usr)otpIssue(usr.id,email,'LOGIN');return json(res,{ok:true});
   }
   if (method === 'POST' && pathname === '/api/auth/login-otp/verify') {
-    const b=await body(req),email=safeEmail(b.email),otp=String(b.otp||'');if(!otpVerify(email,'LOGIN',otp))return json(res,{error:'Invalid or expired OTP.'},400);const usr=userByEmail(email);if(!usr)return json(res,{error:'Invalid login.'},401);db.prepare('UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?').run(usr.id);addActivity(usr.id,'LOGIN','Successful OTP login','You signed in with a one-time code.');void sendBusinessEmail(usr.email,'Successful RewardTree login','You signed in successfully','Your RewardTree account was signed in using email OTP.');const s=createSession(usr.id);return json(res,{ok:true,admin:['SUPER_ADMIN','ADMIN','MEMBER_ADMIN','PAYMENT_ADMIN','REWARD_ADMIN','CONTENT_ADMIN','CAMPAIGN_ADMIN'].includes(usr.role)},200,{'Set-Cookie':[cookie('rt_sid',s.sid),cookie('rt_csrf',s.csrf,SESSION_DAYS*86400000,false)]});
+    const b=await body(req),email=safeEmail(b.email),otp=String(b.otp||'');if(!otpVerify(email,'LOGIN',otp))return json(res,{error:'Invalid or expired OTP.'},400);const usr=userByEmail(email);if(!usr)return json(res,{error:'Invalid login.'},401);db.prepare('UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?').run(usr.id);addActivity(usr.id,'LOGIN','Successful OTP login','You signed in with a one-time code.');void sendBusinessEmail(usr.email,'Successful Laksh login','You signed in successfully','Your Laksh account was signed in using email OTP.');const s=createSession(usr.id);return json(res,{ok:true,admin:['SUPER_ADMIN','ADMIN','MEMBER_ADMIN','PAYMENT_ADMIN','REWARD_ADMIN','CONTENT_ADMIN','CAMPAIGN_ADMIN'].includes(usr.role)},200,{'Set-Cookie':[cookie('rt_sid',s.sid),cookie('rt_csrf',s.csrf,SESSION_DAYS*86400000,false)]});
   }
   if (method === 'POST' && pathname === '/api/auth/forgot') {
     const b=await body(req),email=safeEmail(b.email);if(!rateLimit('forgot',`${req.socket.remoteAddress}|${email}`,5,15*60*1000))return json(res,{error:'Please wait before requesting another code.'},429);const usr=userByEmail(email);if(usr)otpIssue(usr.id,email,'PASSWORD_RESET');return json(res,{ok:true});
   }
   if (method === 'POST' && pathname === '/api/auth/reset') {
-    const b=await body(req),email=safeEmail(b.email),otp=String(b.otp||''),password=String(b.password||'');if(!validatePassword(password))return json(res,{error:'Password must be at least 8 characters.'},400);if(!otpVerify(email,'PASSWORD_RESET',otp))return json(res,{error:'Invalid or expired OTP.'},400);const usr=userByEmail(email);if(!usr)return json(res,{error:'Invalid request.'},400);db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password),usr.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(usr.id);addActivity(usr.id,'SECURITY','Password changed','Your password was successfully reset.');void sendBusinessEmail(usr.email,'RewardTree password changed','Your password was changed','Your RewardTree password was successfully changed.');return json(res,{ok:true});
+    const b=await body(req),email=safeEmail(b.email),otp=String(b.otp||''),password=String(b.password||'');if(!validatePassword(password))return json(res,{error:'Password must be at least 8 characters.'},400);if(!otpVerify(email,'PASSWORD_RESET',otp))return json(res,{error:'Invalid or expired OTP.'},400);const usr=userByEmail(email);if(!usr)return json(res,{error:'Invalid request.'},400);db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password),usr.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(usr.id);addActivity(usr.id,'SECURITY','Password changed','Your password was successfully reset.');void sendBusinessEmail(usr.email,'Laksh password changed','Your password was changed','Your Laksh password was successfully changed.');return json(res,{ok:true});
   }
   if (method === 'POST' && pathname === '/api/logout') {
-    if (session) { db.prepare('DELETE FROM sessions WHERE id=?').run(session.id); if(current) addActivity(current.id,'LOGIN','Signed out','You signed out of RewardTree.'); }
+    if (session) { db.prepare('DELETE FROM sessions WHERE id=?').run(session.id); if(current) addActivity(current.id,'LOGIN','Signed out','You signed out of Laksh.'); }
     return json(res,{ok:true},200,{'Set-Cookie':[clearCookie('rt_sid'),clearCookie('rt_csrf',)]});
   }
 
@@ -649,7 +649,7 @@ if (method === 'POST' && pathname === '/api/membership/payment-submit') {
     addActivity(current.id,'PAYMENT','Payment proof submitted','Your ₹250 payment proof is waiting for admin review.');
     return Number(row.lastInsertRowid);
   });
-  void sendBusinessEmail(current.email,'RewardTree payment proof received','Payment proof received','We received your ₹250 payment proof. Our team will review it and process your membership within up to 2 hours. If you need help, please contact customer care.'); if (process.env.COMPANY_EMAIL) void sendBusinessEmail(process.env.COMPANY_EMAIL,'RewardTree payment awaiting review','New payment proof awaiting review',`Member ${current.name} (${current.email}) submitted a ₹250 payment proof. Review it in the Admin Payments section.`); return json(res,{ok:true,submissionId:result,status:'PENDING_REVIEW',message:'Payment proof submitted. It may take up to 2 hours to process. Please contact customer care if it takes longer.'});
+  void sendBusinessEmail(current.email,'Laksh payment proof received','Payment proof received','We received your ₹250 payment proof. Our team will review it and process your membership within up to 2 hours. If you need help, please contact customer care.'); if (process.env.COMPANY_EMAIL) void sendBusinessEmail(process.env.COMPANY_EMAIL,'Laksh payment awaiting review','New payment proof awaiting review',`Member ${current.name} (${current.email}) submitted a ₹250 payment proof. Review it in the Admin Payments section.`); return json(res,{ok:true,submissionId:result,status:'PENDING_REVIEW',message:'Payment proof submitted. It may take up to 2 hours to process. Please contact customer care if it takes longer.'});
 }
 
 if (method === 'POST' && pathname === '/api/membership/mock-pay') {
@@ -687,7 +687,7 @@ if (method==='POST' && pathname.startsWith('/api/admin/payment-reviews/') && pat
   addNotify(p.user_id,'Payment proof needs attention',note);
   addActivity(p.user_id,'PAYMENT','Payment proof rejected',note);
   audit(admin.id,'REJECT_PAYMENT','PAYMENT',id,{note,memberId:p.user_id},req);
-  const u=userById(p.user_id); if(u && validEmailForNotify(u.email)) void sendBusinessEmail(u.email,'RewardTree payment proof update','Payment proof needs attention',note);
+  const u=userById(p.user_id); if(u && validEmailForNotify(u.email)) void sendBusinessEmail(u.email,'Laksh payment proof update','Payment proof needs attention',note);
   return json(res,{ok:true});
 }
 if (method==='POST' && pathname==='/api/admin/offline-member') {
@@ -786,7 +786,7 @@ if (method==='GET' && pathname==='/api/admin/whatsapp-config') {
       db.prepare(`UPDATE user_rewards SET status=?${cols[status] ? `,${cols[status]}=CURRENT_TIMESTAMP` : ''} WHERE id=?`).run(status,id);
       const ur=db.prepare('SELECT ur.user_id,r.name FROM user_rewards ur JOIN rewards r ON r.id=ur.reward_id WHERE ur.id=?').get(id);
       audit(admin.id,'UPDATE_REWARD_STATUS','USER_REWARD',id,{status},req);
-      if(ur){addNotify(ur.user_id,'Reward status updated',`Your reward is now marked ${status.toLowerCase()}.`);addActivity(ur.user_id,'REWARD','Reward status updated',`Your reward is now ${status.toLowerCase()}.`);const u2=userById(ur.user_id);if(u2)void sendBusinessEmail(u2.email,'RewardTree reward update','Your reward status was updated',`Your ${ur.name} reward is now marked ${status.toLowerCase()}.`);}
+      if(ur){addNotify(ur.user_id,'Reward status updated',`Your reward is now marked ${status.toLowerCase()}.`);addActivity(ur.user_id,'REWARD','Reward status updated',`Your reward is now ${status.toLowerCase()}.`);const u2=userById(ur.user_id);if(u2)void sendBusinessEmail(u2.email,'Laksh reward update','Your reward status was updated',`Your ${ur.name} reward is now marked ${status.toLowerCase()}.`);}
       return json(res,{ok:true});
     }
     return json(res,{error:'Not found'},404);
