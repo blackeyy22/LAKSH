@@ -1,0 +1,9 @@
+{
+  "name": "rewardtree",
+  "version": "4.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"start":"node --env-file-if-exists=.env server.js"},
+  "engines": {"node": ">=22.5.0"},
+  "dependencies": {"nodemailer":"10.0.1"}
+}
