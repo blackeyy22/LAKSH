@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS users(
  membership_paid INTEGER NOT NULL DEFAULT 0,
  role TEXT NOT NULL DEFAULT 'MEMBER',
  email_verified INTEGER NOT NULL DEFAULT 0,
+ password_initialized INTEGER NOT NULL DEFAULT 1,
  whatsapp_opt_in INTEGER NOT NULL DEFAULT 0,
  network_count INTEGER NOT NULL DEFAULT 0,
  onboarding_complete INTEGER NOT NULL DEFAULT 0,
@@ -129,8 +130,10 @@ try { db.exec("CREATE INDEX IF NOT EXISTS idx_users_auto_pool_parent ON users(au
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_users_auto_pool_status ON users(auto_pool_status)"); } catch {}
 for (const stmt of [
   "ALTER TABLE users ADD COLUMN phone TEXT",
-  "ALTER TABLE users ADD COLUMN is_offline INTEGER NOT NULL DEFAULT 0"
+  "ALTER TABLE users ADD COLUMN is_offline INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN password_initialized INTEGER NOT NULL DEFAULT 1"
 ]) { try { db.exec(stmt); } catch {} }
+try { db.exec("UPDATE users SET password_initialized=0 WHERE is_offline=1 AND password_initialized=1"); } catch {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)"); } catch {}
 
 const APP_NAME = process.env.APP_NAME || 'Laksh';
@@ -337,8 +340,10 @@ function paymentConfig() {
   const num = phoneDigits(process.env.WHATSAPP_NUMBER || '');
   const paymentData = process.env.PAYMENT_UPI_ID ? `upi://pay?pa=${process.env.PAYMENT_UPI_ID}&pn=${encodeURIComponent(process.env.COMPANY_NAME || APP_NAME)}&am=250&cu=INR` : '';
   const paymentQr = process.env.PAYMENT_QR_IMAGE || (paymentData ? `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(paymentData)}` : '');
-  const whatsappQr = num ? `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(`https://wa.me/${num}`)}` : '';
-  return { whatsappNumber: num, paymentQr, whatsappQr, companyName: process.env.COMPANY_NAME || APP_NAME };
+  const whatsappGroupLink = String(process.env.WHATSAPP_GROUP_LINK || '').trim();
+  const whatsappTarget = whatsappGroupLink || (num ? `https://wa.me/${num}` : '');
+  const whatsappQr = whatsappTarget ? `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(whatsappTarget)}` : '';
+  return { whatsappNumber: num, whatsappGroupLink, paymentQr, whatsappQr, companyName: process.env.COMPANY_NAME || APP_NAME };
 }
 
 function activateMemberAfterPayment(userId, paymentSubmissionId = null, reviewerId = null) {
@@ -527,7 +532,7 @@ async function handle(req, res) {
   };
   if (method === 'GET' && pageMap[pathname]) { if (pathname === '/payment' && !current) return redirect(res, '/login?next=/payment'); return serveFile(res, path.join(PUBLIC_DIR, pageMap[pathname])); }
   if (method === 'GET' && pathname.startsWith('/assets/')) return serveFile(res, path.join(PUBLIC_DIR, pathname.slice('/assets/'.length)));
-  if (method === 'GET' && pathname.startsWith('/uploads/')) return serveFile(res, path.join(PUBLIC_DIR, pathname.slice('/uploads/'.length)));
+  if (method === 'GET' && pathname.startsWith('/uploads/')) return serveFile(res, path.join(UPLOAD_DIR, pathname.slice('/uploads/'.length)));
   if (method === 'GET' && pathname === '/api/payment-config') return json(res, paymentConfig());
 
   // Auth APIs (pre-auth endpoints do not require CSRF).
@@ -542,7 +547,7 @@ async function handle(req, res) {
     const referralCode = `PENDING-${crypto.randomUUID()}`;
     try {
       const tx = inTransaction(() => {
-        const r = db.prepare('INSERT INTO users(name,email,password_hash,referral_code) VALUES(?,?,?,?)').run(name,email,hashPassword(password),referralCode);
+        const r = db.prepare('INSERT INTO users(name,email,password_hash,referral_code,email_verified,password_initialized) VALUES(?,?,?,?,0,1)').run(name,email,hashPassword(password),referralCode);
         const id = Number(r.lastInsertRowid);
         addActivity(id, 'ACCOUNT', 'Account created', 'Your account was created. Add a referral code after login, or activate your membership directly.');
         return id;
@@ -572,7 +577,12 @@ async function handle(req, res) {
   if (method === 'POST' && pathname === '/api/auth/login') {
     const b = await body(req), email=safeEmail(b.email), password=String(b.password||''), ip=req.socket.remoteAddress||'unknown';
     if (!rateLimit('login', `${ip}|${email}`, 10, 15*60*1000)) return json(res,{error:'Too many login attempts. Try again later.'},429);
-    const usr=userByEmail(email); if(!usr || !verifyPassword(password,usr.password_hash)) return json(res,{error:'Invalid email or password.'},401);
+    const usr=userByEmail(email); if(!usr)return json(res,{error:'Invalid email or password.'},401);
+    if(usr.is_offline&&!usr.password_initialized){
+      if(!validatePassword(password))return json(res,{error:'Choose a password with at least 8 characters.'},400);
+      db.prepare('UPDATE users SET password_hash=?,password_initialized=1 WHERE id=?').run(hashPassword(password),usr.id);
+      addActivity(usr.id,'SECURITY','Password created','Your permanent Laksh password was created on first login.');
+    } else if(!verifyPassword(password,usr.password_hash)) return json(res,{error:'Invalid email or password.'},401);
     if(!usr.email_verified) return json(res,{needsVerification:true,email:usr.email},403);
     db.prepare('UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?').run(usr.id); addActivity(usr.id,'LOGIN','Successful login','You signed in to Laksh.');
     void sendBusinessEmail(usr.email,'Successful Laksh login','You signed in successfully','Your Laksh account was just signed in successfully. If this was not you, reset your password and review your account.');
@@ -613,6 +623,7 @@ async function handle(req, res) {
   if (method === 'POST' && pathname === '/api/me/onboarding') {db.prepare('UPDATE users SET onboarding_complete=1 WHERE id=?').run(current.id);return json(res,{ok:true});}
   if (method === 'POST' && pathname === '/api/me/notifications/read') {db.prepare('UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE user_id=?').run(current.id);return json(res,{ok:true});}
   if (method === 'POST' && pathname === '/api/me/profile') {const b=await body(req),name=String(b.name||current.name).trim(),phone=String(b.phone||current.phone||'').trim();if(name.length<2)return json(res,{error:'Please enter a valid name.'},400);if(phone && !validPhone(phone))return json(res,{error:'Please enter a valid phone number.'},400);db.prepare('UPDATE users SET name=?,phone=?,whatsapp_opt_in=? WHERE id=?').run(name,phone||null,b.whatsapp_opt_in?1:0,current.id);addActivity(current.id,'PROFILE','Profile updated','Your profile details were updated.');return json(res,{ok:true});}
+  if (method === 'POST' && pathname === '/api/me/password') {const b=await body(req),currentPassword=String(b.currentPassword||''),newPassword=String(b.newPassword||'');if(!verifyPassword(currentPassword,current.password_hash))return json(res,{error:'Current password is incorrect.'},400);if(!validatePassword(newPassword))return json(res,{error:'New password must be at least 8 characters.'},400);db.prepare('UPDATE users SET password_hash=?,password_initialized=1 WHERE id=?').run(hashPassword(newPassword),current.id);addActivity(current.id,'SECURITY','Password changed','You changed your Laksh password.');return json(res,{ok:true});}
   if (method === 'GET' && pathname === '/api/products') return json(res,db.prepare('SELECT * FROM store_products WHERE active=1 ORDER BY sort_order,id').all());
   if (method === 'POST' && pathname === '/api/me/attach-referral') {
     if (current.membership_paid) return json(res,{error:'Referral code cannot be added after membership activation.'},400);
@@ -673,7 +684,13 @@ if (method==='POST' && pathname.startsWith('/api/admin/payment-reviews/') && pat
   const p=db.prepare('SELECT * FROM payment_submissions WHERE id=?').get(id);
   if(!p)return json(res,{error:'Payment submission not found.'},404);
   if(p.status==='APPROVED')return json(res,{ok:true,alreadyApproved:true});
-  if(p.status!=='PENDING_REVIEW')return json(res,{error:'Payment is not pending review.'},400);
+  if(!['PENDING_REVIEW','REJECTED'].includes(p.status))return json(res,{error:'Only pending or rejected payments can be approved.'},400);
+  const paymentUser=userById(p.user_id);
+  if(paymentUser?.membership_paid){
+    db.prepare("UPDATE payment_submissions SET status='APPROVED', reviewed_at=CURRENT_TIMESTAMP, reviewed_by=?, review_note=? WHERE id=?").run(admin.id,'Payment approved by admin.',id);
+    audit(admin.id,'APPROVE_PAYMENT','PAYMENT',id,{memberId:p.user_id,alreadyActive:true},req);
+    return json(res,{ok:true,alreadyActive:true});
+  }
   const result=activateMemberAfterPayment(p.user_id,id,admin.id);
   audit(admin.id,'APPROVE_PAYMENT','PAYMENT',id,{memberId:p.user_id,transactionId:result.tx},req);
   return json(res,{ok:true,transactionId:result.tx,referralCode:result.referralCode});
@@ -683,6 +700,7 @@ if (method==='POST' && pathname.startsWith('/api/admin/payment-reviews/') && pat
   const id=Number(pathname.split('/')[4]), b=await body(req), note=String(b.note||'Payment proof was rejected. Please submit a clearer proof.').trim();
   const p=db.prepare('SELECT * FROM payment_submissions WHERE id=?').get(id);
   if(!p)return json(res,{error:'Payment submission not found.'},404);
+  if(p.status!=='PENDING_REVIEW')return json(res,{error:'Only pending payments can be rejected.'},400);
   db.prepare("UPDATE payment_submissions SET status='REJECTED', reviewed_at=CURRENT_TIMESTAMP, reviewed_by=?, review_note=? WHERE id=?").run(admin.id,note,id);
   addNotify(p.user_id,'Payment proof needs attention',note);
   addActivity(p.user_id,'PAYMENT','Payment proof rejected',note);
@@ -702,7 +720,7 @@ if (method==='POST' && pathname==='/api/admin/offline-member') {
   if(sponsorCode && !sponsor)return json(res,{error:'Sponsor referral code not found or inactive.'},400);
   const newId=inTransaction(()=>{
     const code=randCode();
-    const r=db.prepare("INSERT INTO users(name,email,password_hash,referral_code,referred_by_user_id,membership_status,membership_paid,role,email_verified,whatsapp_opt_in,is_offline) VALUES(?,?,?,?,?,?,?,?,?,?,1)").run(name,email,hashPassword(crypto.randomBytes(24).toString('hex')),code,sponsor?.id||null,'ACTIVE',1,'MEMBER',1,b.whatsappOptIn?1:0);
+    const r=db.prepare("INSERT INTO users(name,email,password_hash,referral_code,referred_by_user_id,membership_status,membership_paid,role,email_verified,whatsapp_opt_in,is_offline,password_initialized) VALUES(?,?,?,?,?,?,?,?,?,?,1,0)").run(name,email,hashPassword(crypto.randomBytes(24).toString('hex')),code,sponsor?.id||null,'ACTIVE',1,'MEMBER',1,b.whatsappOptIn?1:0);
     const id=Number(r.lastInsertRowid);
     if(sponsor){db.prepare("INSERT INTO referrals(referrer_id,referred_user_id,status,verified_at) VALUES(?,?,?,CURRENT_TIMESTAMP)").run(sponsor.id,id,'VERIFIED');refreshNetworkCountsFrom(sponsor.id);const v=verifiedCount(sponsor.id);addNotify(sponsor.id,'Referral verified',`${name} was added by admin as a verified referral. Your verified referral total is now ${v}.`);addActivity(sponsor.id,'REFERRAL','Offline referral added',`${name} was added as a verified referral by admin.`);if(v>=AUTO_POOL_TRIGGER)placeIntoAutoPool(sponsor.id);}
     addActivity(id,'ACCOUNT','Offline member created','This member was entered by an administrator without online payment or email OTP.');
@@ -727,7 +745,7 @@ if (method==='GET' && pathname==='/api/admin/whatsapp-config') {
 }
     if (method==='GET' && pathname==='/api/admin/dashboard') {
       const range=Math.min(365,Math.max(1,Number(parsed.searchParams.get('days')||30)));const since=new Date(Date.now()-range*86400000).toISOString();
-      return json(res,{users:db.prepare("SELECT COUNT(*) c FROM users WHERE role='MEMBER'").get().c,active:db.prepare("SELECT COUNT(*) c FROM users WHERE role='MEMBER' AND membership_status='ACTIVE'").get().c,referrals:db.prepare("SELECT COUNT(*) c FROM referrals WHERE status='VERIFIED'").get().c,rewards:db.prepare('SELECT COUNT(*) c FROM user_rewards').get().c,revenue:db.prepare("SELECT COALESCE(SUM(amount),0) total FROM memberships WHERE status='PAID'").get().total,autoPoolMembers:db.prepare("SELECT COUNT(*) c FROM users WHERE auto_pool_position IS NOT NULL AND auto_pool_status='ACTIVE'").get().c,newMembers:db.prepare("SELECT COUNT(*) c FROM users WHERE role='MEMBER' AND created_at>=?").get(since).c,newReferrals:db.prepare("SELECT COUNT(*) c FROM referrals WHERE status='VERIFIED' AND verified_at>=?").get(since).c,range});
+      return json(res,{users:db.prepare("SELECT COUNT(*) c FROM users WHERE role='MEMBER'").get().c,active:db.prepare("SELECT COUNT(*) c FROM users WHERE role='MEMBER' AND membership_status='ACTIVE'").get().c,referrals:db.prepare("SELECT COUNT(*) c FROM referrals WHERE status='VERIFIED'").get().c,rewards:db.prepare('SELECT COUNT(*) c FROM user_rewards').get().c,revenue:Number(db.prepare("SELECT COALESCE(SUM(amount),0) total FROM memberships WHERE status='PAID'").get().total)+Number(db.prepare("SELECT COUNT(*) c FROM users WHERE role='MEMBER' AND is_offline=1").get().c)*250,autoPoolMembers:db.prepare("SELECT COUNT(*) c FROM users WHERE auto_pool_position IS NOT NULL AND auto_pool_status='ACTIVE'").get().c,newMembers:db.prepare("SELECT COUNT(*) c FROM users WHERE role='MEMBER' AND created_at>=?").get(since).c,newReferrals:db.prepare("SELECT COUNT(*) c FROM referrals WHERE status='VERIFIED' AND verified_at>=?").get(since).c,range});
     }
     if (method==='GET' && pathname==='/api/admin/members') {
       if(!can(['MEMBER_ADMIN']))return json(res,{error:'Forbidden'},403);const q=String(parsed.searchParams.get('q')||'').trim(),status=String(parsed.searchParams.get('status')||''),page=Math.max(1,Number(parsed.searchParams.get('page')||1)),limit=Math.min(100,Math.max(10,Number(parsed.searchParams.get('limit')||25))),offset=(page-1)*limit;const filters=["role='MEMBER'"];const args=[];if(q){filters.push('(name LIKE ? OR email LIKE ? OR referral_code LIKE ?)');args.push(`%${q}%`,`%${q}%`,`%${q}%`);}if(status){filters.push('membership_status=?');args.push(status);}const where=filters.join(' AND ');const total=Number(db.prepare(`SELECT COUNT(*) c FROM users WHERE ${where}`).get(...args).c);const rows=db.prepare(`SELECT id,name,email,referral_code,membership_status,email_verified,network_count,created_at,last_login_at FROM users WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...args,limit,offset);return json(res,{rows,total,page,limit});
@@ -736,6 +754,7 @@ if (method==='GET' && pathname==='/api/admin/whatsapp-config') {
     if (method==='GET' && pathname==='/api/admin/hierarchy/children') {if(!can(['MEMBER_ADMIN']))return json(res,{error:'Forbidden'},403);const parent=Number(parsed.searchParams.get('parentId'));if(!parent)return json(res,{error:'parentId required'},400);return json(res,db.prepare("SELECT id,name,email,referral_code,referred_by_user_id,network_count,membership_status,role FROM users WHERE referred_by_user_id=? ORDER BY id").all(parent));}
     if (method==='GET' && pathname==='/api/admin/auto-pool') {if(!can(['MEMBER_ADMIN']))return json(res,{error:'Forbidden'},403);const rootId=Number(parsed.searchParams.get('rootId')||0);const depth=Math.min(AUTO_POOL_REWARDED_DEPTHS,Math.max(1,Number(parsed.searchParams.get('depth')||3)));let anchor=null;if(rootId)anchor=userById(rootId);else anchor=db.prepare("SELECT * FROM users WHERE auto_pool_position IS NOT NULL AND auto_pool_status='ACTIVE' ORDER BY auto_pool_position LIMIT 1").get();if(!anchor?.auto_pool_position)return json(res,{active:false,nodes:[],stageCounts:{1:0,2:0,3:0}});return json(res,memberAutoPoolSnapshot(anchor.id,'admin',depth));}
     if (method==='GET' && pathname==='/api/admin/auto-pool/children') {if(!can(['MEMBER_ADMIN']))return json(res,{error:'Forbidden'},403);const parent=Number(parsed.searchParams.get('parentId'));if(!parent)return json(res,{error:'parentId required'},400);return json(res,autoPoolChildren(parent));}
+    if (method==='POST' && pathname.startsWith('/api/admin/member/') && pathname.endsWith('/password')) {if(!can(['MEMBER_ADMIN']))return json(res,{error:'Forbidden'},403);const id=Number(pathname.split('/').at(-2)),member=userById(id),b=await body(req);if(!member||member.role!=='MEMBER')return json(res,{error:'Member not found'},404);const password=String(b.password||'');if(!validatePassword(password))return json(res,{error:'Password must be at least 8 characters.'},400);db.prepare('UPDATE users SET password_hash=?,password_initialized=1 WHERE id=?').run(hashPassword(password),id);addActivity(id,'SECURITY','Password changed by admin','An administrator changed the member password.');audit(admin.id,'CHANGE_MEMBER_PASSWORD','USER',id,{},req);return json(res,{ok:true});}
     if (method==='GET' && pathname.startsWith('/api/admin/member/')) {if(!can(['MEMBER_ADMIN']))return json(res,{error:'Forbidden'},403);const id=Number(pathname.split('/').pop()),member=userById(id);if(!member)return json(res,{error:'Not found'},404);audit(admin.id,'VIEW_MEMBER','USER',id,{},req);return json(res,{member:{...member,password_hash:undefined},verifiedReferrals:verifiedCount(id),network:networkCount(id),autoPool:memberAutoPoolSnapshot(id,'admin'),refs:db.prepare("SELECT u.id,u.name,u.email,u.referral_code,r.status FROM referrals r JOIN users u ON u.id=r.referred_user_id WHERE r.referrer_id=? ORDER BY r.id DESC").all(id),rewards:db.prepare('SELECT r.name,r.description,ur.status,ur.unlocked_at,ur.claimed_at,ur.shipped_at,ur.delivered_at FROM user_rewards ur JOIN rewards r ON r.id=ur.reward_id WHERE ur.user_id=?').all(id),activity:db.prepare('SELECT * FROM activity_events WHERE user_id=? ORDER BY id DESC LIMIT 30').all(id)});}
     if (method==='GET' && pathname==='/api/admin/rewards') {if(!can(['REWARD_ADMIN']))return json(res,{error:'Forbidden'},403);return json(res,db.prepare('SELECT * FROM rewards ORDER BY sort_order,id').all());}
     if (method==='GET' && pathname==='/api/admin/products') {if(!can(['CONTENT_ADMIN']))return json(res,{error:'Forbidden'},403);return json(res,db.prepare('SELECT * FROM store_products WHERE active=1 ORDER BY sort_order,id').all());}
